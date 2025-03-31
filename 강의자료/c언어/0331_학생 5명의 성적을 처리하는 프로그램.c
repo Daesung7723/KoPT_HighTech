@@ -65,5 +65,30 @@ int main(void)
 		printf("\n");
 	}
 
+	for (int i = 0; i < ROW - 1; i++) {
+		least = i;
+
+		for (int j = i + 1; j < ROW; j++) {
+			if (arr[j][RNK] < arr[least][RNK]) least = j;
+		}
+
+		for (int cnt = 0; cnt < COL; cnt++) {
+			tmp[cnt] = arr[i][cnt];
+			arr[i][cnt] = arr[least][cnt];
+			arr[least][cnt] = tmp[cnt];
+		}
+	}
+
+	printf("\n정렬 후\n");
+	printf("이름\t영어\t수학\t과학\t총점\t평균\t석차\n");
+	for (int i = 0; i < ROW; i++) {
+		printf("%c\t", arr[i][0]);
+		for (int j = 1; j < COL; j++) {
+			printf("%d\t", arr[i][j]);
+		}
+		printf("\n");
+	}
+
 	return 0;
 }
+
