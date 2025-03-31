@@ -21,3 +21,49 @@ E				                      		3
 A						                      4
 D    						                  5
 */
+
+#define _CRT_SECURE_NO_WARNINGS
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#define ROW 5
+#define COL 7
+#define SUM 4
+#define AVG 5
+#define RNK 6
+
+int main(void)
+{
+	int arr[ROW][COL] = { 0 };
+	int least;
+	int tmp[7] = { 0 };
+
+	srand((unsigned int)time(NULL));
+
+	for (int i = 0; i < ROW; i++) {
+		arr[i][0] = 'A' + i;
+		arr[i][RNK] = 1;
+		for (int j = 1; j < 4; j++) {
+			arr[i][j] = rand() % 100 + 1;
+			arr[i][SUM] += arr[i][j];
+		}
+		arr[i][AVG] = arr[i][SUM] / 3;
+	}
+
+	for (int i = 0; i < ROW; i++) {
+		for (int j = 0; j < ROW; j++) {
+			if (arr[i][SUM] < arr[j][SUM]) arr[i][RNK]++;
+		}
+	}
+
+	printf("이름\t영어\t수학\t과학\t총점\t평균\t석차\n");
+	for (int i = 0; i < ROW; i++) {
+		printf("%c\t", arr[i][0]);
+		for (int j = 1; j < COL; j++) {
+			printf("%d\t", arr[i][j]);
+		}
+		printf("\n");
+	}
+
+	return 0;
+}
