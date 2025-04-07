@@ -74,11 +74,12 @@ int menu() {
 		printf("1. 입력하기\n");
 		printf("2. 수정하기\n");
 		printf("3. 출력하기\n");
-		printf("4. 불러오기\n");
-		printf("5. 종료하기\n");
+		printf("4. 저장하기\n");
+		printf("5. 불러오기\n");
+		printf("6. 종료하기\n");
 		printf("번호를 선택하세요 :");
 		scanf("%d", &m);
-	} while (m<1||m>5);
+	} while (m<1||m>6);
 
 	return m;
 }
@@ -91,7 +92,6 @@ void main() {
 		case 1:
 			input_all(arr);
 			cal_rank(arr);
-			save_data(arr);
 			break;
 		case 2:
 			break;
@@ -99,9 +99,12 @@ void main() {
 			prt_data(arr);
 			break;
 		case 4:
-			load_data(arr);
+			save_data(arr);
 			break;
 		case 5:
+			load_data(arr);
+			break;
+		case 6:
 			return 0;
 			break;
 		}
