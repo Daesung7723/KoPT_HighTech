@@ -60,6 +60,7 @@ void LCD_init(void)
 
 	// RW 핀으로 LOW를 출력하여 쓰기 전용으로 사용
 	PORT_CONTROL &= ~(1 << RW_PIN);
+	_delay_ms(2);
 	
 	LCD_write_command(COMMAND_8_BIT_MODE);		// 8비트 모드
 	
