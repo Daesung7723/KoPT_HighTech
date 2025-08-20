@@ -1,0 +1,8 @@
+1. HxD 프로그램 설치
+2. 설치 후 관련 DLL파일의 값을 수정해야 함.
+  - AVRISP가 STK500으로 인식되어 문제 발생
+  - C:\Program Files (x86)\Atmel\Studio\7.0\atbackend\codeCache
+  - 상기 경로에 com_atmel_hil_stk.dll 파일 수정
+  - 설치 경로에서는 수정이 불가능하므로 바탕화면으로 이동 후 수정
+  - STK500_2를 AVRISP로 수정 후 저장
+  - 설치 폴더로 덮어쓰기
