@@ -1,14 +1,13 @@
 /*
- * ATmega128 ADC 모니터 & 주크박스 통합 시스템 (UART 제어)
+ * ATmega128 통합 주크박스
  * Target: ATmega128
  * Crystal: 16MHz (16MHz 크리스탈 사용)
  *
  * --- 기능 ---
+ * - ADC 값 표시와 주크박스 기능을 단일 모드로 통합
+ * - LCD 상단: ADC0, ADC1 값 실시간 표시
+ * - LCD 하단: 키 입력에 따른 곡 정보 및 재생 상태를 스크롤하여 표시
  * - 모든 모드에서 ADC 값을 주기적으로 UART 통신
- * - 음악 재생 중에는 LCD 상태 값을 UART로 전송하지 않음
- * - 평상시: ADC 값을 LCD에 표시하고 UART로 전송 (ADC 모드)
- * - 키패드 또는 UART 명령으로 주크박스 모드로 전환 및 음악 재생
- * - 음악 재생이 끝나면 자동으로 ADC 모드로 복귀
  *
  * --- 연결 정보 ---
  * LCD 데이터 (D0-D7): PORTB
@@ -16,7 +15,7 @@
  * 부저 (+): PE3 (OC3A)
  * 키 매트릭스: PC0-PC7
  * ADC0/ADC1: PF0/PF1
- * UART1 TXD1/RXD1: PD3/PD2
+ * UART1 TXD1: PD3
  */
 
 #define F_CPU 16000000UL
@@ -31,7 +30,6 @@
 // --- 상수 정의 ---
 #define KEY_START_STOP 15
 #define KEY_CLEAR      10
-#define KEY_MODE_SWITCH 11
 #define KEY_NONE       255
 
 #define LCD_DATA_PORT PORTB
@@ -59,7 +57,6 @@
 #define HALF_NOTE    80
 
 // --- 열거형 및 구조체 정의 ---
-typedef enum { MODE_ADC_MONITOR, MODE_JUKEBOX } SystemMode;
 typedef enum { STATE_SELECT_SONG, STATE_PLAYING, STATE_PAUSED } JukeboxState;
 
 typedef struct {
@@ -71,7 +68,7 @@ typedef struct {
 
 // --- 4x4 키 매트릭스 맵 (상하 및 좌우 반전) ---
 const uint8_t keymap[4][4] = {
-    {KEY_START_STOP, KEY_CLEAR, 0, KEY_MODE_SWITCH},
+    {KEY_START_STOP, KEY_CLEAR, 0, 11},
     {14, 9, 8, 7},
     {13, 6, 5, 4},
     {12, 3, 2, 1}
@@ -112,18 +109,21 @@ const Song jukebox[] = {
 const uint8_t total_songs = sizeof(jukebox) / sizeof(Song);
 
 // --- 전역 변수 ---
-volatile SystemMode g_current_mode = MODE_ADC_MONITOR;
 volatile JukeboxState g_jukebox_state = STATE_SELECT_SONG;
 volatile uint8_t g_selected_song_index = 0;
 volatile uint8_t g_is_playing = 0;
 volatile uint16_t g_note_index = 0;
 volatile uint16_t g_note_timer = 0;
-volatile uint8_t g_update_lcd_request = 1;
 
-// UART 수신용 버퍼 및 플래그
-char g_uart_rx_buffer[20];
-volatile uint8_t g_uart_rx_index = 0;
-volatile uint8_t g_uart_command_received = 0;
+// 작업 요청 플래그
+volatile uint8_t g_update_lcd_request = 1;
+volatile uint8_t g_periodic_task_request = 0;
+volatile uint8_t g_scroll_request = 0;
+
+// 데이터 저장용 변수
+volatile uint16_t g_adc0_val = 0, g_adc1_val = 0;
+char g_scroll_text_buffer[40] = "Select Song...";
+volatile uint8_t g_scroll_index = 0;
 
 // --- 함수 선언 ---
 void init_all(void);
@@ -136,7 +136,6 @@ void play_sound(uint16_t frequency);
 void stop_sound(void);
 uint8_t get_key(void);
 void process_key_input(uint8_t key);
-void process_uart_command(void);
 void update_lcd_display(void);
 uint16_t read_adc(uint8_t channel);
 void uart1_puts(const char *str);
@@ -146,89 +145,78 @@ void lcd_init(void);
 void lcd_string(const char *str);
 void lcd_goto_xy(unsigned char row, unsigned char col);
 
-// --- Timer1 인터럽트 서비스 루틴 (음악 재생) ---
+// --- Timer1 인터럽트 서비스 루틴 (10ms 시스템 틱) ---
 ISR(TIMER1_COMPA_vect) {
-    if (!g_is_playing) return;
+    static uint16_t periodic_counter = 0;
+    static uint16_t scroll_counter = 0;
 
-    g_note_timer++;
+    // 음악 재생 로직
+    if (g_is_playing) {
+        g_note_timer++;
+        const Song* current_song = &jukebox[g_selected_song_index];
+        uint8_t note_duration = current_song->rhythm[g_note_index];
+        uint8_t play_time = note_duration * 0.85;
 
-    const Song* current_song = &jukebox[g_selected_song_index];
-    uint8_t note_duration = current_song->rhythm[g_note_index];
-    uint8_t play_time = note_duration * 0.85;
-
-    if (g_note_timer == play_time) {
-        stop_sound();
-    }
-    
-    if (g_note_timer >= note_duration) {
-        g_note_timer = 0;
-        g_note_index++;
+        if (g_note_timer == play_time) stop_sound();
         
-        if (g_note_index >= current_song->note_count) {
-            g_note_index = 0;
-            g_is_playing = 0;
-            g_jukebox_state = STATE_SELECT_SONG;
-            g_current_mode = MODE_ADC_MONITOR; // 연주 끝나면 ADC 모드로 복귀
-            g_update_lcd_request = 1;
-            return;
+        if (g_note_timer >= note_duration) {
+            g_note_timer = 0;
+            g_note_index++;
+            if (g_note_index >= current_song->note_count) {
+                g_note_index = 0;
+                g_is_playing = 0;
+                g_jukebox_state = STATE_SELECT_SONG;
+                g_update_lcd_request = 1;
+            } else {
+                play_sound(current_song->melody[g_note_index]);
+            }
         }
-        play_sound(current_song->melody[g_note_index]);
     }
-}
 
-// --- UART1 수신 완료 인터럽트 ---
-ISR(USART1_RX_vect) {
-    char received_char = UDR1;
-    if (received_char == '\n' || received_char == '\r') {
-        g_uart_rx_buffer[g_uart_rx_index] = '\0'; // Null 문자로 문자열 종료
-        g_uart_rx_index = 0;
-        g_uart_command_received = 1; // 명령어 수신 완료 플래그 설정
-    } else {
-        if (g_uart_rx_index < sizeof(g_uart_rx_buffer) - 1) {
-            g_uart_rx_buffer[g_uart_rx_index++] = received_char;
-        }
+    // 500ms 주기 작업 플래그
+    periodic_counter++;
+    if (periodic_counter >= 50) {
+        periodic_counter = 0;
+        g_periodic_task_request = 1;
+    }
+
+    // 400ms 스크롤 작업 플래그
+    scroll_counter++;
+    if (scroll_counter >= 40) {
+        scroll_counter = 0;
+        g_scroll_request = 1;
     }
 }
 
 int main(void) {
     init_all();
 
-    char uart_buf[20];
-    uint16_t adc_timer = 0;
-
     while (1) {
-        // 키패드 및 UART 입력 처리
+        // 이벤트 처리: 키패드
         uint8_t key = get_key();
         if (key != KEY_NONE) {
             process_key_input(key);
         }
-        if (g_uart_command_received) {
-            process_uart_command();
-            g_uart_command_received = 0;
+
+        // 주기적 작업 처리 (500ms)
+        if (g_periodic_task_request) {
+            g_periodic_task_request = 0;
+            g_adc0_val = read_adc(0);
+            g_adc1_val = read_adc(1);
+            g_update_lcd_request = 1; // ADC 값 갱신 시 LCD 업데이트
+        }
+        
+        // 스크롤 처리 (400ms)
+        if (g_scroll_request) {
+            g_scroll_request = 0;
+            g_scroll_index++;
+            g_update_lcd_request = 1;
         }
 
-        // --- 핵심 수정 사항 1: ADC 값 읽기 및 전송 로직을 루프 상단으로 이동 ---
-        _delay_ms(10);
-        adc_timer += 10;
-        if (adc_timer >= 500) {
-            adc_timer = 0;
-            uint16_t adc0_val = read_adc(0);
-            uint16_t adc1_val = read_adc(1);
-
-            // 순수 ADC 데이터는 항상 전송
-            sprintf(uart_buf, "[ADC0]%d\n", adc0_val); uart1_puts(uart_buf);
-            sprintf(uart_buf, "[ADC1]%d\n", adc1_val); uart1_puts(uart_buf);
-            
-            // ADC 모드일 때만 LCD 업데이트 요청
-            if (g_current_mode == MODE_ADC_MONITOR) {
-                g_update_lcd_request = 1;
-            }
-        }
-
-        // 업데이트 요청이 있으면 화면 및 UART 갱신
+        // 화면 업데이트 요청 처리
         if (g_update_lcd_request) {
-            update_lcd_display();
             g_update_lcd_request = 0;
+            update_lcd_display();
         }
     }
     return 0;
@@ -241,8 +229,6 @@ void init_all(void) {
     lcd_init();
     init_timer3_pwm();
     init_timer1_interrupt();
-    _delay_ms(500);
-    stop_sound();
     sei();
 }
 
@@ -252,105 +238,87 @@ void init_ports(void) {
     DDRE |= (1 << PE3);
     DDRC = 0x0F; PORTC = 0xF0;
     DDRF &= ~((1 << PF0) | (1 << PF1));
-    DDRD |= (1 << PD3); // TXD1 출력
-    DDRD &= ~(1 << PD2); // RXD1 입력
+    DDRD |= (1 << PD3);
 }
 
 void init_uart1(void) {
     uint16_t ubrr = (F_CPU / (16UL * BAUD_RATE)) - 1;
     UBRR1H = (uint8_t)(ubrr >> 8);
     UBRR1L = (uint8_t)ubrr;
-    UCSR1B = (1 << TXEN1) | (1 << RXEN1) | (1 << RXCIE1);
+    UCSR1B = (1 << TXEN1);
     UCSR1C = (1 << UCSZ11) | (1 << UCSZ10);
 }
 
 void process_key_input(uint8_t key) {
-    if (key == KEY_MODE_SWITCH) {
-        g_current_mode = (g_current_mode == MODE_ADC_MONITOR) ? MODE_JUKEBOX : MODE_ADC_MONITOR;
+    g_scroll_index = 0; // 키 입력 시 스크롤 초기화
+    
+    if (key >= 1 && key <= total_songs) {
+        g_selected_song_index = key - 1;
+        g_jukebox_state = STATE_SELECT_SONG;
         g_is_playing = 0;
         stop_sound();
-        g_jukebox_state = STATE_SELECT_SONG;
-    } else {
-        if (g_current_mode == MODE_JUKEBOX) {
-            switch (g_jukebox_state) {
-                case STATE_SELECT_SONG:
-                    if (key >= 1 && key <= total_songs) {
-                        g_selected_song_index = key - 1;
-                    } else if (key == KEY_START_STOP) {
-                        g_note_index = 0; g_note_timer = 0; g_is_playing = 1;
-                        g_jukebox_state = STATE_PLAYING;
-                        play_sound(jukebox[g_selected_song_index].melody[g_note_index]);
-                    }
-                    break;
-                case STATE_PLAYING:
-                    if (key == KEY_START_STOP) {
-                        g_is_playing = 0; g_jukebox_state = STATE_PAUSED; stop_sound();
-                    }
-                    break;
-                case STATE_PAUSED:
-                    if (key == KEY_START_STOP) {
-                        g_is_playing = 1; g_jukebox_state = STATE_PLAYING;
-                        play_sound(jukebox[g_selected_song_index].melody[g_note_index]);
-                    }
-                    break;
-            }
+    } else if (key == KEY_START_STOP) {
+        if (g_jukebox_state == STATE_PLAYING) {
+            g_is_playing = 0;
+            g_jukebox_state = STATE_PAUSED;
+            stop_sound();
+        } else { // SELECT 또는 PAUSED 상태
+            g_note_index = (g_jukebox_state == STATE_SELECT_SONG) ? 0 : g_note_index;
+            g_note_timer = (g_jukebox_state == STATE_SELECT_SONG) ? 0 : g_note_timer;
+            g_is_playing = 1;
+            g_jukebox_state = STATE_PLAYING;
+            play_sound(jukebox[g_selected_song_index].melody[g_note_index]);
         }
     }
     g_update_lcd_request = 1;
 }
 
-void process_uart_command(void) {
-    int song_num = 0;
-    if (sscanf(g_uart_rx_buffer, "[Song-%d]", &song_num) == 1) {
-        if (song_num >= 1 && song_num <= total_songs) {
-            g_current_mode = MODE_JUKEBOX;
-            g_selected_song_index = song_num - 1;
-            g_note_index = 0;
-            g_note_timer = 0;
-            g_is_playing = 1;
-            g_jukebox_state = STATE_PLAYING;
-            play_sound(jukebox[g_selected_song_index].melody[g_note_index]);
-            g_update_lcd_request = 1;
-        }
-    }
-}
-
 void update_lcd_display(void) {
     char line1_buf[17] = "";
     char line2_buf[17] = "";
-    lcd_command(0x01);
+    char temp_scroll_buf[17] = "";
+    char uart_buf[40];
+    
+    // Line 1: ADC 값 표시
+    sprintf(line1_buf, "C0:%04d C1:%04d", g_adc0_val, g_adc1_val);
+    lcd_goto_xy(0, 0);
+    lcd_string(line1_buf);
 
-    if (g_current_mode == MODE_ADC_MONITOR) {
-        uint16_t adc0_val = read_adc(0);
-        uint16_t adc1_val = read_adc(1);
-        sprintf(line1_buf, "ADC0: %04d", adc0_val);
-        sprintf(line2_buf, "ADC1: %04d", adc1_val);
-        
-        // ADC 모드일 때만 LCD 미러링 데이터 전송
-        uart1_puts("[LCD Data-0]"); uart1_puts(line1_buf); uart1_puts("\n");
-        uart1_puts("[LCD Data-1]"); uart1_puts(line2_buf); uart1_puts("\n");
+    // Line 2: 상태 및 곡 정보 스크롤
+    const Song* current_song = &jukebox[g_selected_song_index];
+    switch (g_jukebox_state) {
+        case STATE_SELECT_SONG:
+            sprintf(g_scroll_text_buffer, "Select: %d. %s  ", g_selected_song_index + 1, current_song->title);
+            break;
+        case STATE_PLAYING:
+            sprintf(g_scroll_text_buffer, "Playing: %s  ", current_song->title);
+            break;
+        case STATE_PAUSED:
+            sprintf(g_scroll_text_buffer, "Paused: %s  ", current_song->title);
+            break;
+    }
 
-    } else { // MODE_JUKEBOX
-        const Song* current_song = &jukebox[g_selected_song_index];
-        switch (g_jukebox_state) {
-            case STATE_SELECT_SONG:
-                sprintf(line1_buf, "Select Song:");
-                sprintf(line2_buf, "> %d. %s", g_selected_song_index + 1, current_song->title);
-                break;
-            case STATE_PLAYING:
-                sprintf(line1_buf, "Now Playing...");
-                sprintf(line2_buf, "%s", current_song->title);
-                break;
-            case STATE_PAUSED:
-                sprintf(line1_buf, "Paused");
-                sprintf(line2_buf, "%s", current_song->title);
-                break;
-        }
+    int len = strlen(g_scroll_text_buffer);
+    if (g_scroll_index >= len) g_scroll_index = 0;
+
+    strncpy(temp_scroll_buf, g_scroll_text_buffer + g_scroll_index, 16);
+    temp_scroll_buf[16] = '\0';
+    
+    if (strlen(temp_scroll_buf) < 16 && len > 16) {
+        strncat(temp_scroll_buf, g_scroll_text_buffer, 16 - strlen(temp_scroll_buf));
     }
     
-    // LCD에 표시
-    lcd_goto_xy(0, 0); lcd_string(line1_buf);
-    lcd_goto_xy(1, 0); lcd_string(line2_buf);
+    lcd_goto_xy(1, 0);
+    lcd_string(temp_scroll_buf);
+    for(int i = strlen(temp_scroll_buf); i < 16; i++) {
+        lcd_data(' ');
+    }
+
+    // UART 전송
+    sprintf(uart_buf, "[ADC0]%d\n", g_adc0_val); uart1_puts(uart_buf);
+    sprintf(uart_buf, "[ADC1]%d\n", g_adc1_val); uart1_puts(uart_buf);
+    uart1_puts("[LCD Data-0]"); uart1_puts(line1_buf); uart1_puts("\n");
+    uart1_puts("[LCD Data-1]"); uart1_puts(temp_scroll_buf); uart1_puts("\n");
 }
 
 // --- 기타 유틸리티 및 하드웨어 제어 함수들 (변경 없음) ---
