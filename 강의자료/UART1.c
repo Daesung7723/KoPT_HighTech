@@ -1,5 +1,5 @@
 ﻿#include <avr/io.h>
-
+   
 void UART1_init(void)
 {
 	UBRR1H = 0x00;			// 9600 보율로 설정
