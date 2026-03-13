@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <windows.h>
 
 int dice() {
 	return rand() % 6 + 1;
@@ -25,6 +26,7 @@ int winner(int P1, int P2) {
 }
 
 void main() {
+	SetConsoleOutputCP(65001);
 	int d=0, t=0, key;
 	int P1 = 0, P2 = 0;
 
