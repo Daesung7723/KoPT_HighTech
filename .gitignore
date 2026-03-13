@@ -1,0 +1,14 @@
+# Visual Studio and C/C++ build files
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.log
+*.tlog
+*.pch
+*.idb
+vc*.pdb
+
+# User-specific files
+*.user
+*.suo
