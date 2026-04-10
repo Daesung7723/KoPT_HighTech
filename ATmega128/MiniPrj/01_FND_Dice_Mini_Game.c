@@ -21,12 +21,19 @@
  *    패턴 1사이클이 끝나면 LED는 3초 동안 꺼진 뒤 다시 같은 패턴을 반복한다.
  * 7. sw2를 누르면 언제든 전체 상태가 초기화된다.
  *
- * [족보]
- * - 4개 일치     : HAND_FOUR
- * - 3개 일치     : HAND_TRIPLE
- * - 2개 2개 일치 : HAND_TWO_PAIR
- * - 2개 일치     : HAND_ONE_PAIR
- * - 그 외        : HAND_NONE
+ * [족보별 LED 패턴]
+ * HAND_FOUR     : ON-OFF × 4회, 100ms 간격 → 3초 OFF
+ * HAND_TRIPLE   : ON-OFF × 3회, 150ms 간격 → 3초 OFF
+ * HAND_TWO_PAIR : ON-OFF × 2회 → 400ms OFF → ON-OFF × 2회, 200ms 간격 → 3초 OFF
+ * HAND_ONE_PAIR : ON-OFF × 2회, 200ms 간격 → 3초 OFF
+ * HAND_NONE     : LED OFF
+ *
+ * [핀 배치]
+ * - PA0~PA3 : FND 자리 선택 (digit select)
+ * - PB0~PB7 : FND 세그먼트 데이터
+ * - PC0     : sw1 (내부 풀업, Active Low)
+ * - PC1     : sw2 (내부 풀업, Active Low)
+ * - PC4     : LED (Active Low, sink 전류)
  * ================================================================
  */
 
@@ -54,11 +61,10 @@
 // 너무 크면 FND가 깜빡이고, 너무 작으면 처리 흐름이 복잡해진다.
 #define LOOP_DELAY_MS       5
 
-// 숫자가 한 번 바뀌는 간격
-// 200ms = 0.2초
+// 숫자가 한 번 바뀌는 간격 (200ms = 0.2초)
 #define ROLL_INTERVAL_MS    200
 
-// LED 패턴이 한 번 끝난 뒤 LED를 꺼두는 시간
+// LED 패턴이 한 번 끝난 뒤 LED를 꺼두는 시간 (3초)
 #define LED_OFF_HOLD_MS     3000
 
 // 포커 족보를 숫자로 표현
@@ -69,8 +75,8 @@
 #define HAND_FOUR           4
 
 // LED 동작 모드
-// PATTERN: 실제 패턴 점멸 중
-// OFF_HOLD: 패턴이 끝난 뒤 3초 쉬는 구간
+// LED_MODE_PATTERN  : 실제 패턴 점멸 중
+// LED_MODE_OFF_HOLD : 패턴이 끝난 뒤 3초 쉬는 구간
 #define LED_MODE_PATTERN    0
 #define LED_MODE_OFF_HOLD   1
 
@@ -98,13 +104,11 @@ const uint8_t fnd_font[10] = {
 };
 
 // FND에 실제로 표시할 4자리 값
-// digits[0] : 천의 자리
-// digits[1] : 백의 자리
-// digits[2] : 십의 자리
-// digits[3] : 일의 자리
+// digits[0]: 천의 자리, digits[1]: 백의 자리
+// digits[2]: 십의 자리, digits[3]: 일의 자리
 volatile uint8_t digits[4] = {0, 0, 0, 0};
 
-// 현재 FND에서 몇 번째 자리를 표시할지 저장
+// 현재 FND에서 몇 번째 자리를 표시할지 저장 (0~3 순환)
 volatile uint8_t mux_digit_idx = 0;
 
 /*
@@ -128,13 +132,13 @@ void fnd_display_step(void) {
     // 혹시라도 잘못된 값이 들어오면 0으로 안전 처리
     if (value > 9) value = 0;
 
-    // 먼저 모든 자리를 끈다. (블랭킹)
+    // 먼저 모든 자리를 끈다 (블랭킹)
     PORTA = 0xFF;
 
     // 현재 표시할 숫자의 segment 데이터 출력
     PORTB = fnd_font[value];
 
-    // 해당 자리만 선택해서 켠다.
+    // 해당 자리만 선택해서 켠다
     // Common Anode이므로 자리 선택이 active low 형태
     PORTA = ~(1 << mux_digit_idx);
 
@@ -144,13 +148,13 @@ void fnd_display_step(void) {
 }
 
 /* ================================================================
- * 3. 버튼 / LED 관련
+ * 3. 버튼 & LED 관련
  * ================================================================
  * 버튼은 내부 풀업 저항을 사용한다.
  * 따라서 버튼을 누르지 않았을 때는 1, 누르면 GND로 연결되어 0이 된다.
  *
  * LED는 Active Low 방식이다.
- * 즉, PORTC의 해당 비트를 0으로 만들면 LED가 켜지고,
+ * 즉, PORTC의 해당 비트를 0으로 만들면 LED가 켜지고 (sink 전류),
  * 1로 만들면 LED가 꺼진다.
  */
 
@@ -183,8 +187,8 @@ uint8_t read_buttons(void) {
 
 /*
  * Active Low LED 제어 함수
- * - led_on()  : PC4 = 0
- * - led_off() : PC4 = 1
+ * - led_on()  : PC4 = 0 → sink 전류 → LED 켜짐
+ * - led_off() : PC4 = 1 → LED 꺼짐
  */
 void led_on(void) {
     PORTC &= ~(1 << LED_PC);
@@ -199,7 +203,6 @@ void led_off(void) {
  * ================================================================
  * LED는 블로킹 delay로 길게 점멸시키지 않고,
  * 메인 루프 안에서 조금씩 상태를 바꾸는 논블로킹 방식으로 처리한다.
- *
  * 이렇게 하면 LED 점멸 중에도 FND 표시가 계속 유지된다.
  */
 
@@ -239,16 +242,21 @@ uint16_t rolling_timer_ms = 0;
  * digits[4]의 값(1~6)이 어떤 조합인지 판정한다.
  *
  * 예:
- * 1 1 1 1 -> HAND_FOUR
- * 2 2 2 5 -> HAND_TRIPLE
- * 3 3 5 5 -> HAND_TWO_PAIR
- * 4 4 1 6 -> HAND_ONE_PAIR
- * 1 2 3 4 -> HAND_NONE
+ * 1 1 1 1 → HAND_FOUR
+ * 2 2 2 5 → HAND_TRIPLE
+ * 3 3 5 5 → HAND_TWO_PAIR
+ * 4 4 1 6 → HAND_ONE_PAIR
+ * 1 2 3 4 → HAND_NONE
  *
- * 판정 과정
+ * 판정 과정:
  * 1) cnt[1]~cnt[6]에 각 숫자가 몇 번 나왔는지 센다.
  * 2) 4개 일치 여부, 3개 일치 여부, pair 개수를 조사한다.
  * 3) 우선순위에 따라 족보를 결정한다.
+ *
+ * [설계 이유]
+ * has_four / has_three / pair_count 를 분리해 두면
+ * 나중에 족보 규칙을 추가할 때 마지막 if/else 부분만 수정하면 된다.
+ * (카운팅 단계와 판정 단계를 분리하는 구조)
  */
 uint8_t evaluate_poker_hand(void) {
     // 숫자 1~6의 등장 횟수를 저장하는 배열
@@ -289,6 +297,7 @@ uint8_t evaluate_poker_hand(void) {
     }
 
     // 족보 우선순위에 따라 반환
+    // 포카드 > 트리플 > 투페어 > 원페어 > 없음
     if (has_four) {
         return HAND_FOUR;
     }
@@ -310,14 +319,18 @@ uint8_t evaluate_poker_hand(void) {
  * 7. LED 패턴 함수 (논블로킹)
  * ================================================================
  * 이 함수는 메인 루프에서 계속 호출된다.
- * 한 번에 긴 delay를 주지 않고, elapsed_ms만큼 시간이 지났다고 가정하고
- * 조금씩 패턴을 진행한다.
+ * 한 번에 긴 delay를 주지 않고, elapsed_ms씩 시간을 누적하면서
+ * 단계별로 LED 상태를 바꾼다.
  *
- * [중요]
- * 패턴 한 사이클이 끝나면
- * → led_mode를 OFF_HOLD로 바꾸고
- * → 3초 동안 LED를 끈 상태로 유지한다.
- * → 3초가 지나면 다시 패턴을 처음부터 반복한다.
+ * 패턴 한 사이클 종료 → LED_MODE_OFF_HOLD(3초 OFF) → 다시 패턴 반복
+ *
+ * [step % 2 규칙]
+ * step이 짝수이면 led_on(), 홀수이면 led_off()
+ *
+ * [HAND_TWO_PAIR 주의사항]
+ * 쌍 사이 OFF 구간(step 4) 이후 step을 10(짝수)으로 점프한다.
+ * 이렇게 하면 두 번째 쌍도 반드시 led_on()부터 시작하는 것이 보장된다.
+ * (step 5로 넘어가면 홀수이므로 led_off()가 실행되어 한 번 깜빡임이 누락됨)
  */
 void led_pattern_step(uint16_t elapsed_ms) {
     // 족보가 없으면 LED는 항상 OFF
@@ -343,20 +356,16 @@ void led_pattern_step(uint16_t elapsed_ms) {
         return;
     }
 
-    // ------------------------------------------------------------
-    // 여기부터는 패턴 모드
-    // ------------------------------------------------------------
+    // 패턴 모드: 족보별 한 사이클 실행 후 OFF_HOLD 진입
     switch (current_hand) {
 
     case HAND_FOUR:
         /*
-         * 4개 일치 패턴
-         * ON-OFF를 4번 반복
-         * step 0: ON
-         * step 1: OFF
-         * ...
-         * step 7: OFF
-         * 끝나면 3초 OFF 대기
+         * 4개 일치 패턴: ON-OFF × 4회, 100ms 간격
+         * step 0: ON  step 1: OFF
+         * step 2: ON  step 3: OFF
+         * step 4: ON  step 5: OFF
+         * step 6: ON  step 7: OFF → OFF_HOLD
          */
         if (led_timer_ms >= 100) {
             led_timer_ms = 0;
@@ -369,7 +378,7 @@ void led_pattern_step(uint16_t elapsed_ms) {
 
             led_step++;
 
-            // step 0~7 총 8단계 끝나면 한 사이클 완료
+            // step 0~7 총 8단계가 끝나면 한 사이클 완료
             if (led_step > 7) {
                 led_off();
                 led_step = 0;
@@ -381,10 +390,10 @@ void led_pattern_step(uint16_t elapsed_ms) {
 
     case HAND_TRIPLE:
         /*
-         * 3개 일치 패턴
-         * ON-OFF를 3번 반복
-         * step 0~5
-         * 끝나면 3초 OFF 대기
+         * 3개 일치 패턴: ON-OFF × 3회, 150ms 간격
+         * step 0: ON  step 1: OFF
+         * step 2: ON  step 3: OFF
+         * step 4: ON  step 5: OFF → OFF_HOLD
          */
         if (led_timer_ms >= 150) {
             led_timer_ms = 0;
@@ -409,24 +418,31 @@ void led_pattern_step(uint16_t elapsed_ms) {
     case HAND_TWO_PAIR:
         /*
          * 2개 2개 일치 패턴
-         * 요구 패턴 느낌:
-         * ON-OFF × 2회 -> 짧은 OFF -> ON-OFF × 2회 -> 3초 OFF
+         * ON-OFF × 2회 → 400ms OFF → ON-OFF × 2회 → 3초 OFF
          *
-         * step 0~3 : 첫 번째 두 번 깜빡임
-         * step 4   : 쌍 사이 OFF 유지
-         * step 5~8 : 두 번째 두 번 깜빡임
-         * step 9   : 사이클 종료 후 3초 OFF
+         * [1단계] step 0~3: 첫 번째 쌍 (200ms 간격)
+         *   step 0: ON  step 1: OFF
+         *   step 2: ON  step 3: OFF
+         *
+         * [2단계] step 4: 쌍 사이 짧은 OFF 대기 (400ms)
+         *   400ms 후 step을 10(짝수)으로 점프
+         *   → 두 번째 쌍이 반드시 led_on()부터 시작하도록 보장
+         *   → (step 5로 넘어가면 홀수 → led_off()로 한 번 깜빡임 누락됨)
+         *
+         * [3단계] step 10~13: 두 번째 쌍 (200ms 간격)
+         *   step 10: ON  step 11: OFF
+         *   step 12: ON  step 13: OFF → OFF_HOLD
          */
         if (led_step == 4) {
-            // 두 쌍 사이의 짧은 OFF 시간
+            // 두 쌍 사이의 짧은 OFF 구간
             led_off();
 
             if (led_timer_ms >= 400) {
                 led_timer_ms = 0;
-                led_step++;
+                led_step = 10; // 짝수로 점프 → 다음 실행에서 led_on() 보장
             }
         }
-        else if (led_step >= 9) {
+        else if (led_step >= 14) {
             // 패턴 1사이클 종료
             led_off();
             led_step = 0;
@@ -434,8 +450,7 @@ void led_pattern_step(uint16_t elapsed_ms) {
             led_timer_ms = 0;
         }
         else {
-            // 첫 번째 두 번 깜빡임(step 0~3),
-            // 두 번째 두 번 깜빡임(step 5~8)
+            // 첫 번째 쌍 (step 0~3), 두 번째 쌍 (step 10~13)
             if (led_timer_ms >= 200) {
                 led_timer_ms = 0;
 
@@ -452,13 +467,9 @@ void led_pattern_step(uint16_t elapsed_ms) {
 
     case HAND_ONE_PAIR:
         /*
-         * 2개 일치 패턴
-         * ON-OFF를 2번 반복
-         * step 0: ON
-         * step 1: OFF
-         * step 2: ON
-         * step 3: OFF
-         * 끝나면 3초 OFF 대기
+         * 2개 일치 패턴: ON-OFF × 2회, 200ms 간격
+         * step 0: ON  step 1: OFF
+         * step 2: ON  step 3: OFF → OFF_HOLD
          */
         if (led_timer_ms >= 200) {
             led_timer_ms = 0;
@@ -491,21 +502,21 @@ void led_pattern_step(uint16_t elapsed_ms) {
  * ================================================================
  * 버튼은 edge detection 방식으로 처리한다.
  *
- * - falling edge : 1 -> 0, 즉 버튼이 눌린 순간
- * - rising edge  : 0 -> 1, 즉 버튼이 떼어진 순간
+ * - falling edge : 1 → 0, 버튼이 눌린 순간
+ * - rising edge  : 0 → 1, 버튼을 뗀 순간
  *
  * 버튼을 누르고 있는 동안 롤링,
- * 버튼을 떼는 순간 값을 확정하는 구조를 만들기 위해
- * edge 검출이 필요하다.
+ * 버튼을 떼는 순간 값을 확정하는 구조를 위해 edge 검출이 필요하다.
+ * 디바운싱: edge 감지 후 20ms 대기 후 재확인
  */
 
 /*
  * sw1 처리
- * - 눌림 시작: 현재 자리 롤링 시작
- * - 떼는 순간: 현재 값이 1~6이면 확정, 아니면 다시 롤링
+ * - 눌림 시작 (falling edge): 현재 자리 롤링 시작
+ * - 떼는 순간 (rising edge) : 현재 값이 1~6이면 확정, 아니면 다시 롤링
  */
 void handle_sw1_edge(uint8_t prev_sw1, uint8_t curr_sw1) {
-    // falling edge : 버튼이 눌린 순간
+    // falling edge : 버튼이 눌린 순간 (1 → 0)
     if (prev_sw1 && !curr_sw1) {
         // 디바운싱
         _delay_ms(20);
@@ -520,7 +531,7 @@ void handle_sw1_edge(uint8_t prev_sw1, uint8_t curr_sw1) {
         }
     }
 
-    // rising edge : 버튼을 떼는 순간
+    // rising edge : 버튼을 떼는 순간 (0 → 1)
     if (!prev_sw1 && curr_sw1) {
         _delay_ms(20);
 
@@ -546,7 +557,7 @@ void handle_sw1_edge(uint8_t prev_sw1, uint8_t curr_sw1) {
                     current_digit_index++;
                 }
                 else {
-                    // 마지막 자리까지 모두 확정되었음
+                    // 마지막 자리까지 모두 확정됨
                     is_done = 1;
 
                     // 족보 판정
@@ -564,11 +575,10 @@ void handle_sw1_edge(uint8_t prev_sw1, uint8_t curr_sw1) {
 
 /*
  * sw2 처리
- * - reset 버튼
- * - 눌리는 순간 전체 상태 초기화
+ * - 눌리는 순간 (falling edge): 전체 상태 초기화
  */
 void handle_sw2_edge(uint8_t prev_sw2, uint8_t curr_sw2) {
-    // falling edge : 버튼이 눌린 순간
+    // falling edge : 버튼이 눌린 순간 (1 → 0)
     if (prev_sw2 && !curr_sw2) {
         _delay_ms(20);
 
@@ -612,7 +622,7 @@ void handle_sw2_edge(uint8_t prev_sw2, uint8_t curr_sw2) {
  * 3) 숫자 롤링 처리
  * 4) LED 패턴 처리
  * 5) FND 한 자리 표시
- * 6) 짧게 delay
+ * 6) 루프 주기 delay
  */
 int main(void) {
     // 포트 초기화
