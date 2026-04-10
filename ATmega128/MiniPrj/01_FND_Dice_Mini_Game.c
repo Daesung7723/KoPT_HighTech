@@ -22,10 +22,10 @@
  * 7. sw2를 누르면 언제든 전체 상태가 초기화된다.
  *
  * [족보별 LED 패턴]
- * HAND_FOUR     : ON-OFF × 4회, 100ms 간격 → 3초 OFF
- * HAND_TRIPLE   : ON-OFF × 3회, 150ms 간격 → 3초 OFF
- * HAND_TWO_PAIR : ON-OFF × 2회 → 400ms OFF → ON-OFF × 2회, 200ms 간격 → 3초 OFF
- * HAND_ONE_PAIR : ON-OFF × 2회, 200ms 간격 → 3초 OFF
+ * HAND_FOUR     : ON-OFF × 4회, 150ms 간격 → 3초 OFF
+ * HAND_TRIPLE   : ON-OFF × 3회, 200ms 간격 → 3초 OFF
+ * HAND_TWO_PAIR : ON-OFF × 2회 → 500ms OFF → ON-OFF × 2회, 250ms 간격 → 3초 OFF
+ * HAND_ONE_PAIR : ON-OFF × 2회, 250ms 간격 → 3초 OFF
  * HAND_NONE     : LED OFF
  *
  * [핀 배치]
@@ -273,8 +273,7 @@ uint8_t evaluate_poker_hand(void) {
         }
     }
 
-    // pair가 몇 종류 있는지 저장
-    // 예: 3 3 5 5 이면 pair_count = 2
+    // pair가 몇 종류 있는지 저장 (예: 3 3 5 5 → pair_count = 2)
     uint8_t pair_count = 0;
 
     // 3개 일치 존재 여부
@@ -331,6 +330,11 @@ uint8_t evaluate_poker_hand(void) {
  * 쌍 사이 OFF 구간(step 4) 이후 step을 10(짝수)으로 점프한다.
  * 이렇게 하면 두 번째 쌍도 반드시 led_on()부터 시작하는 것이 보장된다.
  * (step 5로 넘어가면 홀수이므로 led_off()가 실행되어 한 번 깜빡임이 누락됨)
+ *
+ * [타이밍 여유값 설정 이유]
+ * FND 다이내믹 구동 시 블랭킹 구간이 반복되면서 LED ON 시간이
+ * 시각적으로 짧아 보이는 현상이 발생한다.
+ * 이를 보완하기 위해 기존 100ms/150ms 간격을 150ms/200ms/250ms로 늘렸다.
  */
 void led_pattern_step(uint16_t elapsed_ms) {
     // 족보가 없으면 LED는 항상 OFF
@@ -342,9 +346,8 @@ void led_pattern_step(uint16_t elapsed_ms) {
     // 시간 누적
     led_timer_ms += elapsed_ms;
 
-    // OFF 대기 모드일 때
+    // OFF 대기 모드: 3초 후 패턴 모드로 복귀
     if (led_mode == LED_MODE_OFF_HOLD) {
-        // 3초가 지나면 다시 패턴 모드로 돌아감
         if (led_timer_ms >= LED_OFF_HOLD_MS) {
             led_timer_ms = 0;
             led_mode = LED_MODE_PATTERN;
@@ -361,13 +364,13 @@ void led_pattern_step(uint16_t elapsed_ms) {
 
     case HAND_FOUR:
         /*
-         * 4개 일치 패턴: ON-OFF × 4회, 100ms 간격
+         * 4개 일치 패턴: ON-OFF × 4회, 150ms 간격
          * step 0: ON  step 1: OFF
          * step 2: ON  step 3: OFF
          * step 4: ON  step 5: OFF
          * step 6: ON  step 7: OFF → OFF_HOLD
          */
-        if (led_timer_ms >= 100) {
+        if (led_timer_ms >= 150) {
             led_timer_ms = 0;
 
             if (led_step % 2 == 0) {
@@ -390,12 +393,12 @@ void led_pattern_step(uint16_t elapsed_ms) {
 
     case HAND_TRIPLE:
         /*
-         * 3개 일치 패턴: ON-OFF × 3회, 150ms 간격
+         * 3개 일치 패턴: ON-OFF × 3회, 200ms 간격
          * step 0: ON  step 1: OFF
          * step 2: ON  step 3: OFF
          * step 4: ON  step 5: OFF → OFF_HOLD
          */
-        if (led_timer_ms >= 150) {
+        if (led_timer_ms >= 200) {
             led_timer_ms = 0;
 
             if (led_step % 2 == 0) {
@@ -418,18 +421,18 @@ void led_pattern_step(uint16_t elapsed_ms) {
     case HAND_TWO_PAIR:
         /*
          * 2개 2개 일치 패턴
-         * ON-OFF × 2회 → 400ms OFF → ON-OFF × 2회 → 3초 OFF
+         * ON-OFF × 2회 → 500ms OFF → ON-OFF × 2회 → 3초 OFF
          *
-         * [1단계] step 0~3: 첫 번째 쌍 (200ms 간격)
+         * [1단계] step 0~3: 첫 번째 쌍 (250ms 간격)
          *   step 0: ON  step 1: OFF
          *   step 2: ON  step 3: OFF
          *
-         * [2단계] step 4: 쌍 사이 짧은 OFF 대기 (400ms)
-         *   400ms 후 step을 10(짝수)으로 점프
+         * [2단계] step 4: 쌍 사이 짧은 OFF 대기 (500ms)
+         *   500ms 후 step을 10(짝수)으로 점프
          *   → 두 번째 쌍이 반드시 led_on()부터 시작하도록 보장
-         *   → (step 5로 넘어가면 홀수 → led_off()로 한 번 깜빡임 누락됨)
+         *   → step 5로 넘어가면 홀수 → led_off()로 깜빡임 1회 누락됨
          *
-         * [3단계] step 10~13: 두 번째 쌍 (200ms 간격)
+         * [3단계] step 10~13: 두 번째 쌍 (250ms 간격)
          *   step 10: ON  step 11: OFF
          *   step 12: ON  step 13: OFF → OFF_HOLD
          */
@@ -437,7 +440,7 @@ void led_pattern_step(uint16_t elapsed_ms) {
             // 두 쌍 사이의 짧은 OFF 구간
             led_off();
 
-            if (led_timer_ms >= 400) {
+            if (led_timer_ms >= 500) {
                 led_timer_ms = 0;
                 led_step = 10; // 짝수로 점프 → 다음 실행에서 led_on() 보장
             }
@@ -451,7 +454,7 @@ void led_pattern_step(uint16_t elapsed_ms) {
         }
         else {
             // 첫 번째 쌍 (step 0~3), 두 번째 쌍 (step 10~13)
-            if (led_timer_ms >= 200) {
+            if (led_timer_ms >= 250) {
                 led_timer_ms = 0;
 
                 if (led_step % 2 == 0) {
@@ -467,11 +470,11 @@ void led_pattern_step(uint16_t elapsed_ms) {
 
     case HAND_ONE_PAIR:
         /*
-         * 2개 일치 패턴: ON-OFF × 2회, 200ms 간격
+         * 2개 일치 패턴: ON-OFF × 2회, 250ms 간격
          * step 0: ON  step 1: OFF
          * step 2: ON  step 3: OFF → OFF_HOLD
          */
-        if (led_timer_ms >= 200) {
+        if (led_timer_ms >= 250) {
             led_timer_ms = 0;
 
             if (led_step % 2 == 0) {
