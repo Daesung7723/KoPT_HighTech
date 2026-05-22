@@ -23,7 +23,7 @@
 
 // --- LCD 핀 및 포트 정의 ---
 #define LCD_DATA_PORT PORTB
-#define LCD_DATA_DDR  DDRB
+#define LCD_DATA_DDR  DDRBs
 #define LCD_CTRL_PORT PORTA
 #define LCD_CTRL_DDR  DDRA
 #define RS_PIN 0 // PA0
