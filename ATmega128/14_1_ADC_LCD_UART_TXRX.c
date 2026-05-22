@@ -69,20 +69,23 @@ int main(void) {
     while (1) {
         // 수신 버퍼에 데이터가 있으면 처리
         if (uart1_rx_ready()) {
-            char c = uart1_getc();
+            char c = UDR1;  // uart1_rx_ready()로 이미 확인했으므로 직접 읽음
 
             // 에코: 수신 문자를 PC로 되돌려 송신
             uart1_putc(c);
 
             if (c == '\n' || c == '\r') {
-                // 개행 수신 시 버퍼를 LCD에 표시 후 초기화
-                rx_buf[rx_idx] = '\0';
-                lcd_display(rx_buf);
+                // \r\n(Windows) 조합 처리: 버퍼에 내용이 있을 때만 LCD 갱신
+                // \r 처리 후 rx_idx=0 상태에서 \n이 오면 무시하므로 이중 표시 방지
+                if (rx_idx > 0) {
+                    rx_buf[rx_idx] = '\0';
+                    lcd_display(rx_buf);
 
-                // 버퍼 초기화 (공백으로 채움)
-                memset(rx_buf, ' ', RX_BUF_SIZE - 1);
-                rx_buf[RX_BUF_SIZE - 1] = '\0';
-                rx_idx = 0;
+                    // 버퍼 초기화 (공백으로 채움)
+                    memset(rx_buf, ' ', RX_BUF_SIZE - 1);
+                    rx_buf[RX_BUF_SIZE - 1] = '\0';
+                    rx_idx = 0;
+                }
 
             } else if (rx_idx < RX_BUF_SIZE - 1) {
                 // 일반 문자: 버퍼에 저장
