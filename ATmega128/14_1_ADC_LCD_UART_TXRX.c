@@ -5,10 +5,10 @@
  *
  * --- 기능 ---
  * - UART1(9600bps)으로 수신한 문자열을 LCD에 표시
- * - '\n' 또는 '\r' 수신 시, 또는 최대 32자 도달 시 LCD 갱신
+ * - '\n' 또는 '\r' 수신 시 LCD 갱신 및 에코 송신 (1회)
  * - LCD 1행: 수신 문자열  1~16번째 문자
  * - LCD 2행: 수신 문자열 17~32번째 문자
- * - 수신된 문자는 UART1으로 에코(echo) 송신
+ * - UART RX는 인터럽트(ISR) 방식으로 처리 (22번 코드 방식 적용)
  *
  * --- 연결 정보 ---
  * LCD 데이터 (D0-D7): PORTB
@@ -23,6 +23,7 @@
 
 #include <avr/io.h>
 #include <util/delay.h>
+#include <avr/interrupt.h>
 #include <string.h>
 
 // --- LCD 핀 및 포트 정의 ---
@@ -34,13 +35,16 @@
 #define RW_PIN 1  // PA1
 #define E_PIN  2  // PA2
 
+// --- UART RX 전역 버퍼 (ISR에서 사용) ---
+volatile char     g_rx_buf[RX_BUF_SIZE];
+volatile uint8_t  g_rx_idx = 0;
+volatile uint8_t  g_rx_ready = 0;  // 한 줄 수신 완료 플래그
+
 // --- 함수 선언 ---
 void init_ports(void);
 void init_uart1(void);
 void uart1_putc(char data);
 void uart1_puts(const char *str);
-uint8_t uart1_rx_ready(void);
-char uart1_getc(void);
 void lcd_command(unsigned char cmd);
 void lcd_data(unsigned char data);
 void lcd_init(void);
@@ -48,10 +52,34 @@ void lcd_string(const char *str);
 void lcd_goto_xy(unsigned char row, unsigned char col);
 void lcd_display(const char *str);
 
+// --- UART1 수신 완료 인터럽트 서비스 루틴 ---
+// 22번 코드 방식: 문자를 버퍼에 저장하고 개행 수신 시 플래그만 세움
+ISR(USART1_RX_vect) {
+    char c = UDR1;
+
+    if (c == '\n' || c == '\r') {
+        g_rx_buf[g_rx_idx] = '\0';
+        if (g_rx_idx > 0) {
+            g_rx_ready = 1;  // 메인 루프에 처리 요청
+        }
+        g_rx_idx = 0;
+    } else if (g_rx_idx < RX_BUF_SIZE - 1) {
+        g_rx_buf[g_rx_idx++] = c;
+
+        // 32자 꽉 찬 경우 즉시 완료 처리
+        if (g_rx_idx >= RX_BUF_SIZE - 1) {
+            g_rx_buf[g_rx_idx] = '\0';
+            g_rx_ready = 1;
+            g_rx_idx = 0;
+        }
+    }
+}
+
 int main(void) {
     init_ports();
     init_uart1();
     lcd_init();
+    sei();  // 전역 인터럽트 활성화
 
     // 시작 안내 메시지 표시
     lcd_goto_xy(0, 0);
@@ -59,48 +87,21 @@ int main(void) {
     lcd_goto_xy(1, 0);
     lcd_string("9600bps 8-N-1   ");
 
-    uart1_puts("ATmega128 UART RX Ready\n");
-
-    char rx_buf[RX_BUF_SIZE];
-    uint8_t rx_idx = 0;
-    memset(rx_buf, ' ', sizeof(rx_buf) - 1);
-    rx_buf[RX_BUF_SIZE - 1] = '\0';
-
     while (1) {
-        // 수신 버퍼에 데이터가 있으면 처리
-        if (uart1_rx_ready()) {
-            char c = UDR1;  // uart1_rx_ready()로 이미 확인했으므로 직접 읽음
+        // 수신 완료 플래그 확인 (ISR에서 세팅)
+        if (g_rx_ready) {
+            g_rx_ready = 0;
 
-            // 에코: 수신 문자를 PC로 되돌려 송신
-            uart1_putc(c);
+            // 수신 버퍼를 로컬에 복사 (ISR과의 충돌 방지)
+            char local_buf[RX_BUF_SIZE];
+            strcpy(local_buf, (const char *)g_rx_buf);
 
-            if (c == '\n' || c == '\r') {
-                // \r\n(Windows) 조합 처리: 버퍼에 내용이 있을 때만 LCD 갱신
-                // \r 처리 후 rx_idx=0 상태에서 \n이 오면 무시하므로 이중 표시 방지
-                if (rx_idx > 0) {
-                    rx_buf[rx_idx] = '\0';
-                    lcd_display(rx_buf);
+            // LCD에 수신 문자열 표시
+            lcd_display(local_buf);
 
-                    // 버퍼 초기화 (공백으로 채움)
-                    memset(rx_buf, ' ', RX_BUF_SIZE - 1);
-                    rx_buf[RX_BUF_SIZE - 1] = '\0';
-                    rx_idx = 0;
-                }
-
-            } else if (rx_idx < RX_BUF_SIZE - 1) {
-                // 일반 문자: 버퍼에 저장
-                rx_buf[rx_idx++] = c;
-
-                // 32자 도달 시 즉시 LCD에 표시 후 초기화
-                if (rx_idx >= RX_BUF_SIZE - 1) {
-                    rx_buf[rx_idx] = '\0';
-                    lcd_display(rx_buf);
-
-                    memset(rx_buf, ' ', RX_BUF_SIZE - 1);
-                    rx_buf[RX_BUF_SIZE - 1] = '\0';
-                    rx_idx = 0;
-                }
-            }
+            // 에코: 수신된 전체 문자열을 1회 송신
+            uart1_puts(local_buf);
+            uart1_puts("\r\n");
         }
     }
     return 0;
@@ -117,34 +118,18 @@ void init_ports(void) {
 }
 
 /**
- * @brief UART1을 9600bps, 8-N-1, 송수신 활성화로 초기화
+ * @brief UART1을 9600bps, 8-N-1, 송수신 + RX 인터럽트 활성화로 초기화
  */
 void init_uart1(void) {
     uint16_t ubrr_value = (F_CPU / (16UL * BAUD_RATE)) - 1;
     UBRR1H = (unsigned char)(ubrr_value >> 8);
     UBRR1L = (unsigned char)(ubrr_value);
 
-    // 송신(TX) + 수신(RX) 동시 활성화
-    UCSR1B = (1 << TXEN1) | (1 << RXEN1);
+    // TX + RX 활성화, RX 완료 인터럽트(RXCIE1) 활성화
+    UCSR1B = (1 << TXEN1) | (1 << RXEN1) | (1 << RXCIE1);
 
     // 프레임 포맷: 8 데이터 비트, 1 스톱 비트, 패리티 없음
     UCSR1C = (1 << UCSZ11) | (1 << UCSZ10);
-}
-
-/**
- * @brief UART1 수신 버퍼에 데이터 도착 여부 확인 (논블로킹)
- * @return 1: 수신 데이터 있음, 0: 없음
- */
-uint8_t uart1_rx_ready(void) {
-    return (UCSR1A & (1 << RXC1)) ? 1 : 0;
-}
-
-/**
- * @brief UART1에서 한 문자를 수신 (블로킹)
- */
-char uart1_getc(void) {
-    while (!(UCSR1A & (1 << RXC1)));
-    return UDR1;
 }
 
 /**
