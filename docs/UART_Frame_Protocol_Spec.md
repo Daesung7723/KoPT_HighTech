@@ -70,6 +70,24 @@ ATmega128-S ──[UART Frame]──[PC-Server]──[TCP Frame]──[PC-Client
 ← ──────────────────── 최소 4 bytes (PAYLOAD 없을 때) ──────────────────── →
 ```
 
+<table width="100%">
+<tr>
+<th align="center">Byte 0</th>
+<th align="center">Byte 1</th>
+<th align="center">Byte 2</th>
+<th align="center">Byte 3 ~ (2+N)</th>
+<th align="center">Byte (3+N)</th>
+</tr>
+<tr>
+<td align="center"><b>SOF</b><br>1 byte<br><code>0xAA</code></td>
+<td align="center"><b>TYPE</b><br>1 byte</td>
+<td align="center"><b>LENGTH</b><br>1 byte<br>= N</td>
+<td align="center"><b>PAYLOAD</b><br>0 ~ 28 bytes</td>
+<td align="center"><b>CRC8</b><br>1 byte</td>
+</tr>
+<tr><td colspan="5" align="center">← &nbsp; 최소 4 bytes (PAYLOAD 없을 때) &nbsp; →</td></tr>
+</table>
+
 ### 3.2 필드 정의
 
 #### SOF (Start of Frame)
@@ -210,6 +228,32 @@ CRC8 = 0x03 XOR 0x02 XOR 0x4F XOR 0x4B = 0x47
 └──────────┴──────────┴─────────┴─────────┴─────────┴──────────┴──────────┴───────────────┴────────┘
 ← ──────────────────────────── 최소 12 bytes (PAYLOAD 없을 때) ──────────────────────────────────── →
 ```
+
+<table width="100%">
+<tr>
+<th align="center">Byte 0-1</th>
+<th align="center">Byte 2</th>
+<th align="center">Byte 3</th>
+<th align="center">Byte 4</th>
+<th align="center">Byte 5</th>
+<th align="center">Byte 6-7</th>
+<th align="center">Byte 8-9</th>
+<th align="center">Byte 10~(9+N)</th>
+<th align="center">Last 2B</th>
+</tr>
+<tr>
+<td align="center"><b>MAGIC</b><br>2 bytes<br><code>AB CD</code></td>
+<td align="center"><b>VERSION</b><br>1 byte<br><code>0x01</code></td>
+<td align="center"><b>TYPE</b><br>1 byte</td>
+<td align="center"><b>SRC_ID</b><br>1 byte</td>
+<td align="center"><b>DST_ID</b><br>1 byte</td>
+<td align="center"><b>SEQ_NUM</b><br>2 bytes<br>Big-End.</td>
+<td align="center"><b>LENGTH</b><br>2 bytes<br>Big-End.</td>
+<td align="center"><b>PAYLOAD</b><br>0~65535 B</td>
+<td align="center"><b>CRC16</b><br>2 bytes<br>Big-End.</td>
+</tr>
+<tr><td colspan="9" align="center">← &nbsp; 최소 12 bytes (PAYLOAD 없을 때) &nbsp; →</td></tr>
+</table>
 
 ### 4.2 필드 정의
 
@@ -760,6 +804,12 @@ def encode_tcp_frame(frame_type: int, src_id: int, dst_id: int,
 │  입력: [L:ON        ]  [전송]        │
 └─────────────────────────────────────┘
 ```
+
+<table width="60%">
+<tr><th colspan="2">수동 송신 (테스트용)</th></tr>
+<tr><td>대상</td><td>● UART &nbsp; ○ TCP &nbsp; <code>ID:1 ▼</code></td></tr>
+<tr><td>입력</td><td><code>L:ON&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</code> &nbsp; <code>[전송]</code></td></tr>
+</table>
 
 Python Repeater는 입력한 문자열을 자동으로 **CMD 타입 UART 프레임**으로
 인코딩합니다.

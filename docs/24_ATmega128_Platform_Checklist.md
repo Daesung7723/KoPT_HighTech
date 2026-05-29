@@ -96,6 +96,28 @@
 └─────────────────┴───────────────────────────────────┘
 ```
 
+<table width="100%">
+<tr><th colspan="2" align="center">ATmega128A 핀 배치 (학생 실습 보드 기준)</th></tr>
+<tr><th>주변장치</th><th>핀</th></tr>
+<tr><td>LCD 데이터</td><td>PORTB (PB0-PB7 = D0-D7)</td></tr>
+<tr><td>LCD RS</td><td>PA0</td></tr>
+<tr><td>LCD RW</td><td>PA1</td></tr>
+<tr><td>LCD E(Enable)</td><td>PA2</td></tr>
+<tr><th>ADC 입력</th><th>PF0~PF7 (ADC0~ADC7)</th></tr>
+<tr><td>UART1 TXD1</td><td>PD3</td></tr>
+<tr><td>UART1 RXD1</td><td>PD2</td></tr>
+<tr><th>부저 (OC3A)</th><th>PE3 — Timer3 PWM 출력</th></tr>
+<tr><td>서보/DC모터</td><td>PE3 또는 Timer1 OC1A (PB5) ⚠ 주의</td></tr>
+<tr><th>KeyMatrix C0~C3</th><th>PC0~PC3 (열 출력, 액티브 Low)</th></tr>
+<tr><td>KeyMatrix L0~L3</td><td>PC4~PC7 (행 입력, 내부 풀업)</td></tr>
+<tr><th>SPI SCK</th><th>PB1 ⚠ LCD 데이터 포트와 겹침</th></tr>
+<tr><td>SPI MOSI</td><td>PB2 ⚠ LCD와 동시 사용 불가</td></tr>
+<tr><td>SPI MISO</td><td>PB3 ⚠ SPI 사용 시 LCD→PORTA</td></tr>
+<tr><td>SPI SS</td><td>PB0 ⚠ 배선 변경 필요</td></tr>
+<tr><th>I2C SDA (TWI)</th><th>PD1 (LCD, UART와 겹치지 않음)</th></tr>
+<tr><td>I2C SCL (TWI)</td><td>PD0</td></tr>
+</table>
+
 > **⚠ SPI 사용 시**: PORTB를 SPI가 점유하므로 LCD 데이터 핀을 PORTA로 변경하고
 > LCD 제어 핀은 PORTB 하위 3비트(PB0-PB2)로 변경해야 한다. (DC_MTR_ADC_PWM_CTRL.c 참고)
 
@@ -120,6 +142,23 @@
 │  spi_init(), i2c_init()       │                          │
 └───────────────────────────────┴─────────────────────────┘
 ```
+
+<table width="100%">
+<tr><td align="center" colspan="2"><b>Application Layer &nbsp;(학생 구현 영역)</b><br>
+<code>on_frame_received()</code> &nbsp;|&nbsp; <code>app_periodic_task()</code> &nbsp;|&nbsp; <code>main()</code></td></tr>
+<tr><td align="center" colspan="2"><b>Platform API Layer &nbsp;(제공)</b><br>
+<code>uart_send_frame()</code> &nbsp;|&nbsp; <code>lcd_printf()</code> &nbsp;|&nbsp; <code>adc_read()</code><br>
+<code>pwm_tone()</code> &nbsp;|&nbsp; <code>spi_transfer()</code> &nbsp;|&nbsp; <code>i2c_write()</code> &nbsp;|&nbsp; ...</td></tr>
+<tr>
+<td align="center" width="60%"><b>HAL (하드웨어 추상화)</b><br>
+<code>uart1_init()</code>, <code>adc_init()</code><br>
+<code>timer1_init()</code>, <code>lcd_init()</code><br>
+<code>spi_init()</code>, <code>i2c_init()</code></td>
+<td align="center" width="40%"><b>ISR / 인터럽트 처리</b><br>
+<code>USART1_RX_vect</code><br>
+<code>TIMER1_COMPA_vect</code></td>
+</tr>
+</table>
 
 ### 2-2. 섹션 구조 (단일 .c 파일 내부)
 

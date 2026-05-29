@@ -125,41 +125,7 @@
 
 ---
 
-## GUI 레이아웃 — Ver.B (Mermaid block-beta)
-
-```mermaid
-block-beta
-  columns 2
-  T["UART ↔ TCP/IP Repeater  v1.0"]:2
-
-  block:UART["UART 설정"]:1
-    columns 1
-    u1["COM: COM3 ▼  새로고침"]
-    u2["Baud: 9600 ▼"]
-    u3["연결    상태: 🟢 연결됨"]
-  end
-
-  block:TCP["TCP/IP 설정"]:1
-    columns 1
-    t1["모드: ● Server  ○ Client"]
-    t2["내 IP: 192.168.1.100  포트: 54321"]
-    t3["서버 시작    상태: 2/3 연결됨 🟢"]
-    block:CLI["클라이언트 목록"]
-      c1["ID:1  192.168.1.101  🟢  강제해제"]
-      c2["ID:2  192.168.1.102  🟢  강제해제"]
-      c3["ID:3  - 대기 중 -   ⚪"]
-    end
-  end
-
-  R["중계 설정  |  ☑ UART→TCP 중계    ☑ TCP→UART 중계  |  브로드캐스트: ● 전체  ○ 선택"]:2
-  L["통신 로그  ☑자동스크롤  지우기  저장  |  [14:23:01] UART→TCP  ADC0:512 → Broadcast  |  [14:23:02] TCP→UART  Song-1 ← ID:1"]:2
-  S["통계  |  UART RX: 1,234 pkts (12,340 B)    TCP TX: 3,702 pkts  |  UART TX: 456 pkts (4,560 B)    TCP RX: 456 pkts  |  CRC 오류: 0    Heartbeat: 🟢 정상 (2/2)"]:2
-  M["수동 송신  |  대상: ● UART  ○ TCP  ID:1 ▼    입력____________    전송"]:2
-```
-
----
-
-## GUI 레이아웃 — Ver.C (HTML 테이블)
+## GUI 레이아웃 — Ver.B (HTML 테이블)
 
 <table width="100%">
 <tr><th colspan="2" align="center">UART ↔ TCP/IP Repeater &nbsp; v1.0</th></tr>
