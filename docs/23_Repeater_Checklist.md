@@ -125,6 +125,107 @@
 
 ---
 
+## GUI 레이아웃 — Ver.B (Mermaid block-beta)
+
+```mermaid
+block-beta
+  columns 2
+  T["UART ↔ TCP/IP Repeater  v1.0"]:2
+
+  block:UART["UART 설정"]:1
+    columns 1
+    u1["COM: COM3 ▼  새로고침"]
+    u2["Baud: 9600 ▼"]
+    u3["연결    상태: 🟢 연결됨"]
+  end
+
+  block:TCP["TCP/IP 설정"]:1
+    columns 1
+    t1["모드: ● Server  ○ Client"]
+    t2["내 IP: 192.168.1.100  포트: 54321"]
+    t3["서버 시작    상태: 2/3 연결됨 🟢"]
+    block:CLI["클라이언트 목록"]
+      c1["ID:1  192.168.1.101  🟢  강제해제"]
+      c2["ID:2  192.168.1.102  🟢  강제해제"]
+      c3["ID:3  - 대기 중 -   ⚪"]
+    end
+  end
+
+  R["중계 설정  |  ☑ UART→TCP 중계    ☑ TCP→UART 중계  |  브로드캐스트: ● 전체  ○ 선택"]:2
+  L["통신 로그  ☑자동스크롤  지우기  저장  |  [14:23:01] UART→TCP  ADC0:512 → Broadcast  |  [14:23:02] TCP→UART  Song-1 ← ID:1"]:2
+  S["통계  |  UART RX: 1,234 pkts (12,340 B)    TCP TX: 3,702 pkts  |  UART TX: 456 pkts (4,560 B)    TCP RX: 456 pkts  |  CRC 오류: 0    Heartbeat: 🟢 정상 (2/2)"]:2
+  M["수동 송신  |  대상: ● UART  ○ TCP  ID:1 ▼    입력____________    전송"]:2
+```
+
+---
+
+## GUI 레이아웃 — Ver.C (HTML 테이블)
+
+<table width="100%">
+<tr><th colspan="2" align="center">UART ↔ TCP/IP Repeater &nbsp; v1.0</th></tr>
+<tr>
+<td width="40%" valign="top">
+
+**UART 설정**
+
+COM: `COM3 ▼` `새로고침`
+Baud: `9600 ▼`
+`연결` &nbsp; 상태: 🟢 연결됨
+
+</td>
+<td width="60%" valign="top">
+
+**TCP/IP 설정**
+
+모드: ● Server &nbsp; ○ Client
+내 IP: `192.168.1.100` &nbsp; 포트: `54321`
+`서버 시작` &nbsp; 상태: 2/3 클라이언트 연결됨 🟢
+
+**클라이언트 목록**
+
+| ID | IP | 상태 | |
+|:--:|---|:--:|---|
+| 1 | 192.168.1.101 | 🟢 | `강제해제` |
+| 2 | 192.168.1.102 | 🟢 | `강제해제` |
+| 3 | - 대기 중 - | ⚪ | |
+
+</td>
+</tr>
+<tr><td colspan="2">
+
+**중계 설정**
+`☑` UART→TCP 중계 &nbsp;&nbsp; `☑` TCP→UART 중계 &nbsp;&nbsp; 브로드캐스트 대상: ● 전체 &nbsp; ○ 선택
+
+</td></tr>
+<tr><td colspan="2">
+
+**통신 로그** &nbsp; `☑ 자동스크롤` &nbsp; `지우기` &nbsp; `저장...`
+
+```text
+[14:23:01.123] UART→TCP  [ADC0] 512        → Broadcast
+[14:23:02.456] TCP→UART  [Song-1]           ← ID:1
+[14:23:04.012] SYSTEM    클라이언트 연결됨  ID:3
+```
+
+</td></tr>
+<tr><td colspan="2">
+
+**통계**
+UART RX: `1,234 pkts` (12,340 B) &nbsp; TCP TX: `3,702 pkts`
+UART TX: `456 pkts` (4,560 B) &nbsp;&nbsp;&nbsp; TCP RX: `456 pkts`
+드롭: `0` &nbsp; CRC 오류: `0` &nbsp; Heartbeat: 🟢 정상 (2/2)
+
+</td></tr>
+<tr><td colspan="2">
+
+**수동 송신 (테스트용)**
+대상: ● UART &nbsp; ○ TCP &nbsp; `ID:1 ▼` &nbsp; `입력____________` &nbsp; `전송`
+
+</td></tr>
+</table>
+
+---
+
 ## 변경 이력
 
 | 버전 | 날짜       | 내용                   |
