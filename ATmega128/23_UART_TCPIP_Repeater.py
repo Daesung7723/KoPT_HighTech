@@ -103,12 +103,14 @@ class UartFrameParser:
                 self._state = 'CRC'
         elif self._state == 'CRC':
             expected = ProtocolCodec.calc_crc8(self._type, self._length, self._payload)
-            frame = None
             if byte == expected:
                 frame = {'type': self._type, 'length': self._length,
                          'payload': bytes(self._payload)}
-            self._reset()
-            return frame
+                self._reset()
+                return frame
+            else:
+                self._reset()
+                return {'crc_error': True}
         return None
 
 
@@ -205,10 +207,14 @@ class UartManager:
                     continue
                 frame = parser.feed(byte[0])
                 if frame:
-                    self.rx_packets += 1
-                    self.rx_bytes   += 3 + frame['length'] + 1
-                    self._on_log('UART RX', f"type=0x{frame['type']:02X} {frame['payload']!r}")
-                    self._on_frame(frame)
+                    if frame.get('crc_error'):
+                        self.crc_errors += 1
+                        self._on_log('UART CRC ERR', f"누적 오류: {self.crc_errors}")
+                    else:
+                        self.rx_packets += 1
+                        self.rx_bytes   += 3 + frame['length'] + 1
+                        self._on_log('UART RX', f"type=0x{frame['type']:02X} {frame['payload']!r}")
+                        self._on_frame(frame)
             except serial.SerialException:
                 break
         self._running = False
@@ -311,6 +317,12 @@ class TcpManager:
                         info.last_hb = time.time()
                         self._send_raw(info.sock,
                                        self._build(TCP_TYPE_HB, TCP_ID_SERVER, cid, 0, b''))
+                    elif (frame['type'] == TCP_TYPE_SYSTEM
+                          and frame['payload'].startswith(b'LB:')):
+                        # TCP 루프백 테스트: LB 프레임 즉시 에코 (릴레이 엔진 우회)
+                        self._send_raw(info.sock,
+                                       self._build(TCP_TYPE_SYSTEM, TCP_ID_SERVER,
+                                                   cid, 0, frame['payload']))
                     else:
                         self._on_frame(frame, cid)
             except OSError:
@@ -383,8 +395,11 @@ class TcpManager:
                 self._client_sock  = sock
                 self._client_hb_ts = time.time()
                 self._on_status(f"서버({host}:{port}) 연결됨", "green")
-                threading.Thread(target=self._client_hb_sender, daemon=True).start()
+                # sock을 인자로 전달: 재연결 시 이전 스레드가 새 소켓을 건드리지 않도록 함
+                threading.Thread(target=self._client_hb_sender,
+                                 args=(sock,), daemon=True).start()
                 self._client_recv_loop()
+                self._client_sock = None   # 수신 루프 종료 후 즉시 소켓 참조 해제
                 self._on_status("서버 연결 끊김 — 재연결 중...", "orange")
             except OSError:
                 self._on_status("연결 실패 — 3초 후 재시도...", "red")
@@ -410,12 +425,15 @@ class TcpManager:
             except OSError:
                 break
 
-    def _client_hb_sender(self):
-        while self._running and self._client_sock:
+    def _client_hb_sender(self, my_sock):
+        # my_sock: 이 스레드가 감시하는 소켓 (재연결 시 교체된 소켓과 구분)
+        while self._running and self._client_sock is my_sock:
             time.sleep(HEARTBEAT_INTERVAL)
+            if self._client_sock is not my_sock:
+                break
             if time.time() - self._client_hb_ts > HEARTBEAT_TIMEOUT:
                 try:
-                    self._client_sock.shutdown(socket.SHUT_RDWR)
+                    my_sock.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
                 break
@@ -437,6 +455,22 @@ class TcpManager:
                               self._client_seq, payload)
             self._client_seq = (self._client_seq + 1) & 0xFFFF
             self._send_raw(self._client_sock, raw)
+
+    def send_to_except(self, dst_id: int, frame_type: int, payload: bytes,
+                       exclude_cid: int = -1):
+        """서버 모드 전용: exclude_cid 클라이언트를 제외하고 전송 (포워딩 시 송신자 제외)"""
+        if self._mode != 'server':
+            return
+        raw = self._build(frame_type, TCP_ID_SERVER, dst_id, 0, payload)
+        with self._lock:
+            if dst_id == TCP_DST_BROADCAST:
+                targets = [info for cid, info in self._clients.items()
+                           if cid != exclude_cid]
+            else:
+                info = self._clients.get(dst_id)
+                targets = [info] if info and dst_id != exclude_cid else []
+        for info in targets:
+            self._send_raw(info.sock, raw)
 
     def _build(self, frame_type, src_id, dst_id, seq_num, payload):
         return ProtocolCodec.encode_tcp(frame_type, src_id, dst_id, seq_num, payload)
@@ -477,8 +511,9 @@ class TcpManager:
 
 class RelayEngine:
     def __init__(self):
-        self.uart_to_tcp = True
-        self.tcp_to_uart = True
+        self.uart_to_tcp  = True
+        self.tcp_to_uart  = True
+        self.tcp_to_tcp   = False   # 클라이언트→서버 수신 메시지를 다른 클라이언트로 포워딩
         self.broadcast_all = True
         self.target_ids    = [1, 2, 3]
 
@@ -511,19 +546,37 @@ class RelayEngine:
                 self.tcp_tx_bytes += len(payload)
         log_cb('UART→TCP', payload.decode('utf-8', errors='replace'))
 
-    def on_tcp_rx(self, frame: dict, uart_mgr: 'UartManager', log_cb):
+    def on_tcp_rx(self, frame: dict, uart_mgr: 'UartManager',
+                  tcp_mgr: 'TcpManager', log_cb, src_cid: int = -1):
         self.tcp_rx_pkts  += 1
         self.tcp_rx_bytes += frame['length']
         if frame['type'] != TCP_TYPE_DATA:
             return
-        if not self.tcp_to_uart or not uart_mgr or not uart_mgr.connected:
+        payload    = frame['payload']
+        forwarded  = False
+
+        # ── 경로 A: TCP → UART (ATmega128) ──
+        # TCP DATA → UART DATA 로 전달: ATmega128이 내용을 보고 직접 판단
+        # (제어 명령은 UART 수동 송신으로 직접 전달해야 함)
+        if self.tcp_to_uart and uart_mgr and uart_mgr.connected:
+            uart_mgr.send(UART_TYPE_DATA, payload)
+            self.uart_tx_pkts  += 1
+            self.uart_tx_bytes += len(payload)
+            log_cb('TCP→UART', payload.decode('utf-8', errors='replace'))
+            forwarded = True
+
+        # ── 경로 B: TCP → TCP (다른 클라이언트로 포워딩) ──
+        if self.tcp_to_tcp and tcp_mgr and tcp_mgr.running:
+            tcp_mgr.send_to_except(TCP_DST_BROADCAST, TCP_TYPE_DATA,
+                                   payload, exclude_cid=src_cid)
+            self.tcp_tx_pkts  += 1
+            self.tcp_tx_bytes += len(payload)
+            src_label = str(src_cid) if src_cid >= 0 else '?'
+            log_cb(f'TCP{src_label}→TCP', payload.decode('utf-8', errors='replace'))
+            forwarded = True
+
+        if not forwarded:
             self.dropped += 1
-            return
-        payload = frame['payload']
-        uart_mgr.send(UART_TYPE_CMD, payload)
-        self.uart_tx_pkts  += 1
-        self.uart_tx_bytes += len(payload)
-        log_cb('TCP→UART', payload.decode('utf-8', errors='replace'))
 
 
 # ─── RepeaterApp ─────────────────────────────────────────────────────────────
@@ -552,6 +605,8 @@ class RepeaterApp:
         self._sel_ids        = {1: tk.BooleanVar(value=True),
                                 2: tk.BooleanVar(value=True),
                                 3: tk.BooleanVar(value=True)}
+        self._t2t_var        = tk.BooleanVar(value=False)  # TCP→TCP 포워딩
+        self._ping_ts: float = 0.0                         # PING 전송 시각 (0 = 대기 없음)
 
         self._build_ui()
         self._refresh_ports()
@@ -592,6 +647,17 @@ class RepeaterApp:
 
     # ── Frame callbacks ──
     def _on_uart_frame(self, frame: dict):
+        # PONG 응답 감지: PING 전송 후 DATA "PONG" 수신 시 RTT 계산
+        if (frame['type'] == UART_TYPE_DATA
+                and frame['payload'] == b'PONG'
+                and self._ping_ts > 0):
+            rtt_ms = (time.time() - self._ping_ts) * 1000
+            self._ping_ts = 0.0
+            msg = f"결과: 정상 — RTT {rtt_ms:.1f} ms"
+            self._enqueue_log('PONG RX', f'RTT {rtt_ms:.1f} ms')
+            self.root.after(0, lambda m=msg: self._ping_result.config(
+                text=m, foreground='green'))
+            return   # 중계 엔진으로 넘기지 않음 (PONG은 테스트 전용)
         self._relay.on_uart_rx(frame, self._tcp, self._enqueue_log)
 
     def _on_tcp_frame(self, frame: dict, client_id):
@@ -602,7 +668,14 @@ class RepeaterApp:
                 cid = int(msg[5:])
                 self._tcp.set_my_id(cid)
         elif frame['type'] == TCP_TYPE_DATA:
-            self._relay.on_tcp_rx(frame, self._uart, self._enqueue_log)
+            # client_id: 서버 모드 시 송신 클라이언트 ID, 클라이언트 모드 시 None
+            src_cid   = client_id if client_id is not None else -1
+            src_label = '서버' if src_cid < 0 else f'Client{src_cid}'
+            # UART RX와 동일하게 수신 즉시 로그 — UART 연결 여부와 무관하게 항상 표시
+            self._enqueue_log(f'TCP RX ← {src_label}',
+                              frame['payload'].decode('utf-8', errors='replace'))
+            self._relay.on_tcp_rx(frame, self._uart, self._tcp,
+                                  self._enqueue_log, src_cid=src_cid)
 
     def _on_tcp_status(self, msg: str, color: str):
         self._enqueue_log('SYSTEM', msg)
@@ -717,6 +790,8 @@ class RepeaterApp:
                         command=self._apply_relay).pack(side='left', padx=8, pady=4)
         ttk.Checkbutton(rf, text="TCP→UART 중계", variable=self._t2u_var,
                         command=self._apply_relay).pack(side='left', padx=8)
+        ttk.Checkbutton(rf, text="TCP→TCP 포워딩", variable=self._t2t_var,
+                        command=self._apply_relay).pack(side='left', padx=8)
 
         ttk.Separator(rf, orient='vertical').pack(side='left', fill='y', padx=8, pady=4)
         ttk.Label(rf, text="브로드캐스트 대상:").pack(side='left')
@@ -790,6 +865,24 @@ class RepeaterApp:
         ttk.Button(mf, text="전송",
                    command=self._manual_send).grid(row=0, column=5, padx=6)
 
+        # PING 테스트 행 (UART 루프백)
+        ttk.Separator(mf, orient='horizontal').grid(
+            row=1, column=0, columnspan=6, sticky='ew', padx=4, pady=2)
+        self._ping_btn = ttk.Button(mf, text="PING 테스트",
+                                    command=self._send_ping)
+        self._ping_btn.grid(row=2, column=0, columnspan=2, padx=6, pady=4, sticky='ew')
+        self._ping_result = ttk.Label(mf, text="결과: -", foreground='gray', width=30)
+        self._ping_result.grid(row=2, column=2, columnspan=4, sticky='w', padx=4)
+
+        # TCP 루프백 테스트 행
+        ttk.Separator(mf, orient='horizontal').grid(
+            row=3, column=0, columnspan=6, sticky='ew', padx=4, pady=2)
+        self._lb_btn = ttk.Button(mf, text="TCP 루프백 테스트",
+                                   command=self._send_tcp_loopback)
+        self._lb_btn.grid(row=4, column=0, columnspan=2, padx=6, pady=4, sticky='ew')
+        self._lb_result = ttk.Label(mf, text="결과: -", foreground='gray', width=30)
+        self._lb_result.grid(row=4, column=2, columnspan=4, sticky='w', padx=4)
+
     # ── UART controls ──
     def _refresh_ports(self):
         ports = [p.device for p in serial.tools.list_ports.comports()]
@@ -821,6 +914,14 @@ class RepeaterApp:
         is_client = self._tcp_mode.get() == 'client'
         self._tcp_btn.config(text="서버에 연결" if is_client else "서버 시작")
         self._remote_ip.config(state='normal' if is_client else 'disabled')
+        # 수동 송신 ID 드롭다운: 클라이언트 모드는 '서버'만, 서버 모드는 클라이언트 ID 목록
+        if is_client:
+            self._manual_id['values'] = ['서버']
+            self._manual_id.set('서버')
+        else:
+            self._manual_id['values'] = ['전체', '1', '2', '3']
+            if self._manual_id.get() not in ['전체', '1', '2', '3']:
+                self._manual_id.set('전체')
 
     def _toggle_tcp(self):
         if self._tcp.running:
@@ -852,6 +953,7 @@ class RepeaterApp:
     def _apply_relay(self):
         self._relay.uart_to_tcp   = self._u2t_var.get()
         self._relay.tcp_to_uart   = self._t2u_var.get()
+        self._relay.tcp_to_tcp    = self._t2t_var.get()
         self._relay.broadcast_all = (self._broadcast_mode.get() == 'all')
         self._relay.target_ids    = [c for c, v in self._sel_ids.items() if v.get()]
 
@@ -865,10 +967,123 @@ class RepeaterApp:
             self._enqueue_log('MANUAL UART', text)
         else:
             id_str = self._manual_id.get()
-            dst = TCP_DST_BROADCAST if id_str == '전체' else int(id_str)
-            self._tcp.send_to(dst, TCP_TYPE_DATA, text.encode('utf-8'))
-            self._enqueue_log(f'MANUAL TCP→{id_str}', text)
+            if id_str == '서버':
+                # 클라이언트 모드: 서버로 전송
+                self._tcp.send_to(TCP_ID_SERVER, TCP_TYPE_DATA, text.encode('utf-8'))
+                self._enqueue_log('MANUAL TCP→서버', text)
+            else:
+                dst = TCP_DST_BROADCAST if id_str == '전체' else int(id_str)
+                self._tcp.send_to(dst, TCP_TYPE_DATA, text.encode('utf-8'))
+                self._enqueue_log(f'MANUAL TCP→{id_str}', text)
         self._manual_entry.delete(0, tk.END)
+
+    def _send_tcp_loopback(self):
+        """TCP 루프백 테스트 — 서버 모드 전용, UART 없이 TCP 레이어만 검증"""
+        if not self._tcp.running or self._tcp._mode != 'server':
+            self._lb_result.config(text="결과: 서버 모드로 실행 중일 때만 사용 가능",
+                                   foreground='red')
+            return
+        try:
+            port = int(self._port_entry.get().strip())
+        except ValueError:
+            self._lb_result.config(text="결과: 포트 번호 오류", foreground='red')
+            return
+        self._lb_result.config(text="결과: 대기 중...", foreground='gray')
+        host = self._local_ip.get().strip()
+        threading.Thread(target=self._tcp_loopback_worker,
+                         args=(host, port), daemon=True).start()
+
+    def _tcp_loopback_worker(self, host: str, port: int):
+        """루프백 테스트 워커 스레드"""
+        TIMEOUT = 3.0
+
+        def fail(msg):
+            self._enqueue_log('TCP LB', f'실패: {msg}')
+            self.root.after(0, lambda m=f"결과: 실패 — {msg}":
+                            self._lb_result.config(text=m, foreground='red'))
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT)
+            sock.connect((host, port))
+        except OSError as e:
+            fail(str(e))
+            return
+
+        try:
+            # ① ASID 수신 대기 (서버가 클라이언트 ID를 배정)
+            parser = TcpFrameParser()
+            assigned = False
+            deadline = time.time() + TIMEOUT
+            while time.time() < deadline:
+                try:
+                    data = sock.recv(256)
+                except socket.timeout:
+                    break
+                if not data:
+                    break
+                for frame in parser.feed_bytes(data):
+                    if (frame['type'] == TCP_TYPE_SYSTEM
+                            and frame['payload'].startswith(b'ASID:')):
+                        assigned = True
+                        break
+                if assigned:
+                    break
+
+            if not assigned:
+                fail('ASID 수신 실패')
+                return
+
+            # ② LB 프레임 전송 + RTT 측정
+            lb_raw = ProtocolCodec.encode_tcp(
+                TCP_TYPE_SYSTEM, TCP_ID_SERVER, TCP_ID_SERVER, 0, b'LB:test')
+            t0 = time.time()
+            sock.sendall(lb_raw)
+            self._enqueue_log('TCP LB TX', 'SYSTEM LB:test →')
+
+            # ③ LB 에코 수신 대기
+            parser2 = TcpFrameParser()
+            got_echo = False
+            deadline2 = time.time() + TIMEOUT
+            while time.time() < deadline2:
+                try:
+                    data = sock.recv(256)
+                except socket.timeout:
+                    break
+                if not data:
+                    break
+                for frame in parser2.feed_bytes(data):
+                    if (frame['type'] == TCP_TYPE_SYSTEM
+                            and frame['payload'].startswith(b'LB:')):
+                        rtt_ms = (time.time() - t0) * 1000
+                        got_echo = True
+                        break
+                if got_echo:
+                    break
+
+            if got_echo:
+                msg = f"결과: 정상 — RTT {rtt_ms:.1f} ms"
+                self._enqueue_log('TCP LB RX', f'RTT {rtt_ms:.1f} ms')
+                self.root.after(0, lambda m=msg:
+                                self._lb_result.config(text=m, foreground='green'))
+            else:
+                fail('응답 없음 (타임아웃)')
+
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def _send_ping(self):
+        """UART PING 전송 — PONG 수신 시 RTT 계산"""
+        if not self._uart.connected:
+            self._ping_result.config(text="결과: UART 미연결", foreground='red')
+            return
+        self._ping_ts = time.time()
+        self._uart.send(UART_TYPE_CMD, b'PING')
+        self._ping_result.config(text="결과: 대기 중...", foreground='gray')
+        self._enqueue_log('PING TX', 'CMD PING →')
 
     # ── Log controls ──
     def _clear_log(self):
@@ -894,7 +1109,7 @@ class RepeaterApp:
         self._stat['uart_tx'].config(text=f"{r.uart_tx_pkts} pkts  {r.uart_tx_bytes} B")
         self._stat['tcp_rx'].config( text=f"{r.tcp_rx_pkts}  pkts  {r.tcp_rx_bytes} B")
         self._stat['tcp_tx'].config( text=f"{r.tcp_tx_pkts}  pkts  {r.tcp_tx_bytes} B")
-        self._stat['crc_err'].config(text=str(r.crc_errors))
+        self._stat['crc_err'].config(text=str(self._uart.crc_errors))
         self._stat['dropped'].config(text=str(r.dropped))
         self._stat['hb'].config(text=f"{n}/3" if self._tcp.running else "-")
         self.root.after(self.STATS_POLL_MS, self._poll_stats)
@@ -938,17 +1153,32 @@ class RepeaterApp:
             self._port_entry.delete(0, tk.END)
             self._port_entry.insert(0, cfg.get('port', '54321'))
             self._tcp_mode.set(cfg.get('tcp_mode', 'server'))
+            # 중계 설정 복원
+            self._u2t_var.set(cfg.get('uart_to_tcp', True))
+            self._t2u_var.set(cfg.get('tcp_to_uart', True))
+            self._t2t_var.set(cfg.get('tcp_to_tcp',  False))
+            self._broadcast_mode.set(cfg.get('broadcast_mode', 'all'))
+            sel = cfg.get('sel_ids', {})
+            for cid, var in self._sel_ids.items():
+                var.set(sel.get(str(cid), True))
+            self._apply_relay()
         except Exception:
             pass
         self._update_tcp_ui()
 
     def _save_config(self):
         cfg = {
-            'com_port':  self._com_combo.get(),
-            'baud_rate': self._baud_combo.get(),
-            'remote_ip': self._remote_ip.get(),
-            'port':      self._port_entry.get(),
-            'tcp_mode':  self._tcp_mode.get(),
+            'com_port':       self._com_combo.get(),
+            'baud_rate':      self._baud_combo.get(),
+            'remote_ip':      self._remote_ip.get(),
+            'port':           self._port_entry.get(),
+            'tcp_mode':       self._tcp_mode.get(),
+            # 중계 설정 저장
+            'uart_to_tcp':    self._u2t_var.get(),
+            'tcp_to_uart':    self._t2u_var.get(),
+            'tcp_to_tcp':     self._t2t_var.get(),
+            'broadcast_mode': self._broadcast_mode.get(),
+            'sel_ids':        {str(c): v.get() for c, v in self._sel_ids.items()},
         }
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:

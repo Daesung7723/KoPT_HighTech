@@ -1,7 +1,16 @@
 {
-  "com_port": "",
+  "com_port": "COM4",
   "baud_rate": "9600",
-  "remote_ip": "",
+  "remote_ip": "172.31.52.89",
   "port": "54321",
-  "tcp_mode": "server"
+  "tcp_mode": "client",
+  "uart_to_tcp": true,
+  "tcp_to_uart": true,
+  "tcp_to_tcp": false,
+  "broadcast_mode": "all",
+  "sel_ids": {
+    "1": true,
+    "2": true,
+    "3": true
+  }
 }
