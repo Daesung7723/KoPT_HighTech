@@ -50,7 +50,7 @@
 | Client TCP RX → Client UART TX  | 수신 데이터를 로컬 ATmega128로 전달 | ✅   |
 | Client UART RX → Server TCP TX  | 로컬 ATmega128 데이터를 Server로 전달 | ✅   |
 | Server TCP RX → Server UART TX  | Server가 받은 TCP 데이터를 ATmega128로 전달 | ✅   |
-| Client-N → Client-M 직접 중계   | 크로스 릴레이 (미지원)             | ❌   |
+| Client-N → Client-M 직접 중계   | TCP→TCP 포워딩 (서버가 수신 후 송신자 제외 브로드캐스트) | ✅   |
 
 ### 모듈별 체크리스트
 

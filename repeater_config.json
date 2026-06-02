@@ -3,7 +3,7 @@
   "baud_rate": "9600",
   "remote_ip": "172.31.52.89",
   "port": "54321",
-  "tcp_mode": "client",
+  "tcp_mode": "server",
   "uart_to_tcp": true,
   "tcp_to_uart": true,
   "tcp_to_tcp": false,
