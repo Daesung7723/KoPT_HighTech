@@ -1,7 +1,0 @@
-{
-    "com_port": "",
-    "baud_rate": "9600",
-    "remote_ip": "",
-    "port": "54321",
-    "tcp_mode": "Client"
-}
